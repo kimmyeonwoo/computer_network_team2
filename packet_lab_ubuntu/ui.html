@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>패킷 분석 실습</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f6fa;color:#182b44;font-family:'Noto Sans CJK KR','DejaVu Sans',sans-serif}main{max-width:1600px;margin:auto;padding:30px}h1{font-size:30px;margin:0 0 8px}header p{color:#596b80;margin:0 0 24px}button,select,input{font:inherit;border:1px solid #b9c7d7;border-radius:6px;background:white;padding:10px 12px;color:inherit}button{cursor:pointer}button.primary{background:#234d80;color:white;border-color:#234d80}button:disabled{opacity:.5;cursor:default}.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.toolbar label{font-size:14px}.status{padding:14px 0;color:#52677f;min-height:50px}#error{color:#b02727;white-space:pre-wrap;margin-bottom:12px}.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(330px,1fr);gap:20px}.panel{background:white;border:1px solid #d9e0e9;border-radius:8px;overflow:hidden}.scroll{overflow:auto;height:530px}table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}th{text-align:left;position:sticky;top:0;background:#e9eef5;padding:11px 9px}td{padding:10px 9px;border-bottom:1px solid #edf0f5;max-width:240px;overflow:hidden;text-overflow:ellipsis}tbody tr{cursor:pointer}tbody tr:hover,tbody tr.selected{background:#eaf2fc}.details{padding:20px;max-height:650px;overflow:auto}.details h2{font-size:20px;margin:0 0 15px}.details h3{font-size:15px;margin:20px 0 8px;color:#34649c}pre{font:12px/1.7 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f6fa;padding:12px;border-radius:5px}dl{display:grid;grid-template-columns:100px 1fr;font-size:14px;gap:8px;margin:0}dt{color:#60748d}dd{margin:0;overflow-wrap:anywhere}#testResult{font-size:14px;color:#375b41;white-space:pre-wrap;margin:0 0 15px}.hint{font-size:13px;color:#687c93;line-height:1.7;margin-top:15px}#empty{text-align:center;padding:60px 15px;color:#667b92}.tag{font-weight:600;color:#275d98}a{color:#275d98}footer{margin-top:20px;font-size:13px;color:#687c93}@media(max-width:1050px){.layout{grid-template-columns:1fr}main{padding:18px}.scroll{height:400px}}
+.experiments{margin:22px 0 8px;padding:18px 0;border-top:1px solid #d9e0e9;border-bottom:1px solid #d9e0e9}.experiments h2{font-size:18px;margin:0 0 14px}.experiment{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0}.experiment strong{width:60px}.experiment input{width:275px}.experiment #dnsResolver{width:150px}#testResult{max-height:240px;overflow:auto;background:#eef3f8;padding:12px;font-family:ui-monospace,monospace}#testResult:empty{display:none}</style></head><body><main>
+<header><h1>HTTP · DNS · SMTP 패킷 분석</h1><p>송신·수신 패킷의 헤더와 응용 메시지를 확인합니다.</p></header>
+<div class="toolbar"><label for="interface">인터페이스</label><select id="interface"></select><button id="start" class="primary">캡처 시작</button><button id="stop">중지</button><button id="export">PCAP 저장</button></div>
+<section class="experiments">
+<h2>외부 실험 대상</h2>
+<div class="experiment"><strong>HTTP</strong><input id="httpUrl" aria-label="HTTP 주소" value="http://example.com/"><select id="httpVersion" aria-label="HTTP 버전"><option>1.1</option><option>1.0</option></select><button id="httpTest">GET 요청 보내기</button></div>
+<div class="experiment"><strong>DNS</strong><input id="dnsDomain" aria-label="질의 도메인" value="example.com"><input id="dnsResolver" aria-label="DNS 서버 IPv4" value="1.1.1.1"><select id="dnsType" aria-label="레코드 유형"><option>A</option><option>AAAA</option><option>MX</option></select><button id="dnsTest">질의 보내기</button></div>
+<div class="experiment"><strong>SMTP</strong><input id="smtpHost" aria-label="SMTP 서버" value="146.59.115.14"><select id="smtpPort" aria-label="SMTP 포트"><option>1125</option><option>2525</option><option>587</option><option>25</option></select><button id="smtpTest">연결 확인</button><button id="smtpSend">테스트 메일 보내기</button></div>
+<p class="hint">각 버튼을 누를 때 해당 외부 서버에 한 번 요청합니다. 아래 요청 결과와 실제 패킷 목록을 함께 확인하세요. SMTP 연결 확인은 서버 인사·EHLO·NOOP·QUIT을 확인합니다. 테스트 메일 보내기는 공개 MailMock 서버로 가짜 주소와 고정된 본문을 1회 전송합니다. 결과가 공개될 수 있으며 451 등 서버 오류가 오면 실패 단계와 응답을 표시합니다.</p>
+</section>
+<div class="status" id="status">준비 중</div><div id="error" role="alert"></div><div id="testResult"></div>
+<div class="toolbar" style="margin-bottom:14px"><label for="protocol">표시 필터</label><select id="protocol"><option value="">모든 프로토콜</option>HTTP</option><option>DNS</option><option>SMTP</option></select><input id="search" placeholder="IP · 포트 · 메시지 검색" aria-label="검색"></div>
+<div class="layout"><section class="panel"><div class="scroll"><table><thead><tr><th>시간</th><th>방향</th><th>출발지</th><th>목적지</th><th>프로토콜</th><th>요약</th></tr></thead><tbody id="rows"></tbody></table><div id="empty">인터페이스를 선택하고 캡처를 시작하세요.<br>외부 사이트 실험은 인터넷에 연결된 인터페이스를 선택합니다.</div></div></section><section class="panel details" id="details"><h2>패킷 상세</h2><p class="hint">목록에서 패킷을 선택하면 TTL, Seq/Ack, 플래그와 분석 메시지가 표시됩니다.</p></section></div>
+<p class="hint">대상 포트 · HTTP 80/8080 · DNS 53/1053 · SMTP 25/2525/587/1125<br>분석 대상은 IPv4입니다. 우분투에서 인터넷에 연결된 인터페이스(예: enp0s8, ens33, eth0)를 선택하세요. 기본 선택은 외부 경로로 추정한 값이므로 실제 패킷 수신 여부를 확인하세요. 최근 1,500개 패킷을 보관합니다.</p>
+<footer id="backend"></footer></main>
+<script>
+const el = id => document.getElementById(id);
+let packets = [];
+let lastId = 0;
+let selected = null;
+let busy = false;
+
+function escapeHTML(value) {
+  const entities = {'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'};
+  return String(value ?? '').replace(/[&<>"']/g, char => entities[char]);
+}
+
+async function api(path, body) {
+  const options = body === undefined ? {} : {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  };
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (!response.ok) throw Error(data.error || '요청 실패');
+  return data;
+}
+
+async function action(path, body = {}) {
+  try {
+    el('error').textContent = '';
+    await api(path, body);
+  } catch (error) {
+    el('error').textContent = error.message;
+  }
+}
+
+function renderRows() {
+  const protocol = el('protocol').value;
+  const query = el('search').value.toLowerCase();
+  const shown = packets.filter(packet =>
+    (!protocol || packet.protocol === protocol) &&
+    (!query || JSON.stringify(packet).toLowerCase().includes(query))
+  );
+  el('empty').style.display = shown.length ? 'none' : 'block';
+  el('rows').innerHTML = shown.map(packet => {
+    const values = [
+      new Date(packet.time * 1000).toLocaleTimeString('ko-KR', {hour12: false}),
+      packet.direction, packet.src + ':' + packet.sport,
+      packet.dst + ':' + packet.dport, packet.protocol, packet.summary
+    ];
+    const cells = values.map(value => '<td>' + escapeHTML(value) + '</td>').join('');
+    return '<tr data-id="' + packet.id + '" class="' +
+      (selected === packet.id ? 'selected' : '') + '">' + cells + '</tr>';
+  }).join('');
+}
+
+function detail(packet) {
+  selected = packet.id;
+  const fields = [
+    ['프로토콜', packet.protocol + ' / ' + packet.transport],
+    ['방향', packet.direction], ['출발지', packet.src + ':' + packet.sport],
+    ['목적지', packet.dst + ':' + packet.dport], ['IPv4 TTL', packet.ttl],
+    ['Seq (원시값)', packet.seq ?? '해당 없음'],
+    ['Ack (원시값)', packet.ack ?? '유효 ACK 없음'],
+    ['TCP 플래그', packet.flags || '해당 없음'],
+    ['패킷 역할', packet.connection_stage || '해당 없음'],
+    ['IP 헤더 길이', packet.ip_header_length + ' bytes'],
+    ['캡처 길이', packet.length + ' bytes']
+  ];
+  const fieldHTML = fields.map(([key,value]) =>
+    '<dt>' + escapeHTML(key) + '</dt><dd>' + escapeHTML(value) + '</dd>'
+  ).join('');
+  const messages = packet.messages.length ? JSON.stringify(packet.messages,null,2) :
+    '완성된 메시지가 없습니다. TCP 제어 패킷이거나 추가 데이터가 필요하거나 TLS로 암호화됐을 수 있습니다.';
+  const notes = packet.notes.length ? '<h3>분석 참고</h3><pre>' +
+    escapeHTML(packet.notes.join('\n')) + '</pre>' : '';
+  el('details').innerHTML = '<h2>패킷 #' + packet.id + '</h2><dl>' + fieldHTML +
+    '</dl><h3>응용 메시지 · 현재 패킷에서 완성된 결과</h3><pre>' +
+    escapeHTML(messages) + '</pre>' + notes +
+    '<h3>현재 패킷 페이로드</h3><pre>' + escapeHTML(packet.payload_preview || '(없음)') +
+    '</pre><h3>원시 패킷 · 최대 4 KiB</h3><pre>' + escapeHTML(packet.hex || '') + '</pre>';
+  renderRows();
+}
+
+el('rows').onclick = event => {
+  const row = event.target.closest('tr');
+  if (!row) return;
+  const packet = packets.find(packet => packet.id === Number(row.dataset.id));
+  if (packet) detail(packet);
+};
+el('protocol').onchange = renderRows;
+el('search').oninput = renderRows;
+el('start').onclick = async () => {
+  try {
+    await api('/api/start', {interface: el('interface').value});
+    packets = [];
+    selected = null;
+    lastId = 0;
+    el('error').textContent = '';
+    el('details').innerHTML = '<h2>패킷 상세</h2><p>목록에서 패킷을 선택하세요.</p>';
+    renderRows();
+  } catch (error) {
+    el('error').textContent = error.message;
+  }
+};
+el('stop').onclick = () => action('/api/stop');
+el('httpTest').onclick = () => action('/api/test', {
+  protocol: 'HTTP', url: el('httpUrl').value, version: el('httpVersion').value
+});
+el('dnsTest').onclick = () => action('/api/test', {
+  protocol: 'DNS', domain: el('dnsDomain').value,
+  resolver: el('dnsResolver').value, type: el('dnsType').value
+});
+el('smtpTest').onclick = () => action('/api/test', {
+  protocol: 'SMTP', host: el('smtpHost').value, port: Number(el('smtpPort').value), mode: 'probe'
+});
+el('smtpSend').onclick = () => action('/api/test', {
+  protocol: 'SMTP', host: el('smtpHost').value, port: Number(el('smtpPort').value), mode: 'public-send'
+});
+el('export').onclick = () => {
+  const link = document.createElement('a');
+  link.href = '/api/export.pcap';
+  link.download = 'packet-lab.pcap';
+  link.click();
+};
+
+async function poll() {
+  if (busy) return;
+  busy = true;
+  try {
+    const state = await api('/api/state?after=' + lastId);
+    if (state.packets.length) {
+      packets = packets.concat(state.packets).slice(-1500);
+      lastId = packets[packets.length - 1].id;
+      renderRows();
+    }
+    el('status').textContent = (state.running ? '● 캡처 중' : '○ 캡처 중지') +
+      ' · ' + (state.interface || '인터페이스 미선택') + ' · 저장 ' + state.stored +
+      '개 · 대상 외 ' + state.ignored + '개 · 해석 오류 ' + state.decode_errors + '개';
+    el('backend').textContent = state.backend || 'Ubuntu Raw Socket · AF_PACKET / SOCK_RAW로 수집합니다.';
+    for (const id of ['httpTest','dnsTest','smtpTest','smtpSend']) el(id).disabled = state.test_running;
+    el('stop').disabled = !state.running;
+    el('testResult').textContent = state.test_running ? '외부 서버 요청 중…' : state.test_result.join('\n');
+    if (state.error) el('error').textContent = state.error;
+  } catch (error) {
+    el('status').textContent = '프로그램 연결을 확인하세요. ' + error.message;
+  } finally {
+    busy = false;
+  }
+}
+
+(async () => {
+  try {
+    const info = await api('/api/interfaces');
+    for (const name of info.interfaces) {
+      const option = document.createElement('option');
+      option.value = option.textContent = name;
+      option.selected = name === info.default;
+      el('interface').append(option);
+    }
+    await poll();
+    setInterval(poll, 700);
+  } catch (error) {
+    el('error').textContent = error.message;
+  }
+})();
+</script></body></html>
